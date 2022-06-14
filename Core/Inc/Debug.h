@@ -16,7 +16,7 @@
 
 /* DEBUG_UART */
 
-#define DEBUG_UART
+//#define DEBUG_UART
 
 #ifdef DEBUG_UART
 #define DEBUG_UART_TX_STATE

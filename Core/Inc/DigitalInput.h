@@ -12,17 +12,6 @@
 #include "Modbus.h"
 #include <stdint.h>
 
-/* DEFINE: digital input bit */
-#define DINPUT(x) (1U<<(x-1)) /* x is from 1 to 8 */
-#define DINPUT_1 0x01
-#define DINPUT_2 0x02
-#define DINPUT_3 0x04
-#define DINPUT_4 0x08
-#define DINPUT_5 0x10 /* Remote Start OUT 2 */
-#define DINPUT_6 0x20 /* Remote Start OUT 1 */
-#define DINPUT_7 0x40
-#define DINPUT_8 0x80 /* EXT Fault AL11 */
-
 typedef struct
 {
 	uint8_t Value;

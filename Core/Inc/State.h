@@ -12,6 +12,6 @@
 #include "stdint.h"
 #include "PSA.h"
 
-#define PSA_STATE__TURN_TO_STANDBY_MODE			-2
-#define PSA_STATE__TURN_TO_ADSOCYCLE_MODE		 1
+//void State_Cycle_Adsorption_1();
+//void State_Standby_1();
 int State_AdsorptionCycleNStandby(int n);

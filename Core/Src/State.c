@@ -10,78 +10,69 @@
 
 /* CYCLE: Adsorption_1 -> Compensation_1 -> Compensation_2 -> Adsorption_2 -> Compensation_1 -> Compensation_2 -> */
 
-uint8_t charState[2]; /* Send the state by UART communication during DEBUG */
+//uint8_t charState[2]; /* Send the state by UART communication during DEBUG */
 extern PSAStruct PSA;
+
+
+void State_OutValve()
+{
+	PSA.ValveState[1] = 0;
+	if(PSA.OUT_1 == 2)
+	{
+		PSA.ValveState[0]++;
+	}
+	else if(PSA.OUT_2 == 2)
+	{
+		PSA.ValveState[1]++;
+	}
+}
 
 void State_Cycle_Adsorption_1()
 {
-#ifdef DEBUG_UART_TX_STATE
-	charState[0] = 'A';
-	charState[1] = '1';
-#endif /* DEBUG_UART_TX_STATE */
 
 	PSA.ValveState[0] = 0xC6;
-	PSA.NextState.Timer = 275; /* ds */
+	State_OutValve();
+	PSA.NextState.Timer = 27; /* 275 ds */
 
 }
 
-void State_Cycle_Compensation_1(){
-#ifdef DEBUG_UART_TX_STATE
-	charState[0] = 'C';
-	charState[1] = '1';
-#endif /* DEBUG_UART_TX_STATE */
-
+void State_Cycle_Compensation_1()
+{
 	PSA.ValveState[0] = 0xA0;
-	PSA.NextState.Timer = 5; /* ds */
+	State_OutValve();
+	PSA.NextState.Timer = 1; /* 5 ds */
 
 }
 
-void State_Cycle_Compensation_2(){
-#ifdef DEBUG_UART_TX_STATE
-	charState[0] = 'C';
-	charState[1] = '2';
-#endif /* DEBUG_UART_TX_STATE */
-
+void State_Cycle_Compensation_2()
+{
 	PSA.ValveState[0] = 0x24;
-	PSA.NextState.Timer = 5; /* ds */
+	State_OutValve();
+	PSA.NextState.Timer = 1; /* 5 ds */
 }
-void State_Cycle_Adsorption_2(){
-#ifdef DEBUG_UART_TX_STATE
-	charState[0] = 'A';
-	charState[1] = '2';
-#endif /* DEBUG_UART_TX_STATE */
-
+void State_Cycle_Adsorption_2()
+{
 	PSA.ValveState[0] = 0xB8;
-	PSA.NextState.Timer = 275; /* ds */
+	State_OutValve();
+	PSA.NextState.Timer = 27; /* 275 ds */
 }
 
 /* -> Standby1 -> Standby2 -> Standby3 -> */
-void State_Standby_1(){
-#ifdef DEBUG_UART_TX_STATE
-	charState[0] = 'S';
-	charState[1] = '1';
-
+void State_Standby_1()
+{
 	PSA.ValveState[0] = 0x08;
-	PSA.NextState.Timer = 50; /* ds */
-#endif /* DEBUG_UART_TX_STATE */
-}
-void State_Standby_2(){
-#ifdef DEBUG_UART_TX_STATE
-	charState[0] = 'S';
-	charState[1] = '2';
+	PSA.NextState.Timer = 5; /* 50 ds */
 
+}
+void State_Standby_2()
+{
 	PSA.ValveState[0] = 0x48;
-	PSA.NextState.Timer = 50; /* ds */
-#endif /* DEBUG_UART_TX_STATE */
+	PSA.NextState.Timer = 5; /* 50 ds */
 }
-void State_Standby_3(){
-#ifdef DEBUG_UART_TX_STATE
-	charState[0] = 'S';
-	charState[1] = 'T';
-
+void State_Standby_3()
+{
 	PSA.ValveState[0] = 0x00;
-	PSA.NextState.Timer = 5; /* ds */
-#endif /* DEBUG_UART_TX_STATE */
+	PSA.NextState.Timer = 0; /* ds */
 }
 
 int State_AdsorptionCycleNStandby(int n)

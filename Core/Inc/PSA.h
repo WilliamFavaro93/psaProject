@@ -9,43 +9,71 @@
 #define PSA_H_
 
 #include "MyQueue.h"
-#include "Relay.h"
+//#include "Relay.h"
 #include "Valve.h"
 #include "Modbus.h"
 #include "EEPRAM.h"
 #include "Time.h"
 #include "AnalogInput.h"
 #include "DigitalInput.h"
-#include "Mode.h"
+//#include "Mode.h"
+//#include "Alarm.h"
+
+/*** MODE ***/
+typedef struct
+{
+	uint8_t Ready; /* It's Ready changes between 0 and 0xFF when someone press the graphical power button */
+	uint8_t Run;
+	uint8_t Standby;
+	uint8_t Alarm;
+} uint8_Mode;
 
 
-/**/
-#define PSA_STEP_CYCLE_MAX 8
-#define PSA_STBY_CYCLE_MAX 6
+/*** ALARM ***/
+typedef struct
+{
+	uint8_t AL1_CANbusError;
+	uint8_t AL2_LowAirPressure;
+	uint8_t AL5_LowProcessTankPressure;
+	uint8_t AL11_External;
+	uint8_t AL16_HighOUT2Pressure;
+	uint8_t AL17_HighDewpoint;
+	uint8_t AL18_HighDewpoint;
+	uint8_t AL19_HighOUT1Pressure;
+	uint8_t AL20_PCComunicationFault;
+	uint8_t AL31_B1ProbeFault;
+	uint8_t AL32_B2ProbeFault;
+	uint8_t AL33_B3ProbeFault;
+	uint8_t AL34_B4ProbeFault;
+	uint8_t AL40_PsaDischanging;
+	uint8_t MissingSDCard;
+} SetOfAlarms;
 
-#define PSA_MODE_START 			0x01
-#define PSA_MODE_RUNNING 		0x02
-#define PSA_MODE_STOP 			0x04
-
-#define PSA_VALVE_CYCLE_MAX_STEP	 	8 /* Numero Totale di Cicli per Valvola */
-#define PSA_VALVE_CYCLE_MAX_STANDBY 	6
-#define PSA_VALVE_MAX 					4 /* Numero Totale di Blocco Valvole */
-
-#define PSA_ADSORPTION_STARTINGVALUE 	0 /* Decimi?Secondi */
-#define PSA_ADSORPTION_TIME 			0 /* Decimi?Secondi */
-#define PSA_COMPENSATION_TIME			0 /* Decimi?Secondi */
+/*** RELAY ***/
+typedef struct
+{
+	uint8_t K1;
+	uint8_t K6;
+	uint8_t K5;
+	uint8_t K4;
+} SetOfRelays;
 
 typedef struct{
+	/* Mode */
 	uint8_Mode Mode;			/**/
+	/* State */
 	int State; 				/* This global variable is used by the tasks: StateTask & */
 	uint16_Timer NextState; /* PSA.NextState is used by the tasks: StateTask & */
+	/* OUT */
 	uint8_t OUT_1;			/* OUT_1, OUT_2 */
 	uint8_t OUT_2;			/* OUT_1, OUT_2 -> 0: Not used; 1: Can be used 2: Actually in use */
 	uint8_t OUTPriority;
+	/* ... */
 	uint8_t CloseDrain;
 
-	uint8_t ValveState[PSA_VALVE_MAX];
+	uint8_t ValveState[8];
 	uint32_t MaskOutputPreview; // <- PSA.Valve.Module
+
 	/* Analog Input */
 	uint16_AnalogInput B1_IncomingAirPressure;			/* B1: 0 - 16 bar */
 	uint16_AnalogInput B2_OutputPressure_1;				/* B2: 0 - 16 bar */
@@ -60,7 +88,11 @@ typedef struct{
 	uint8_DigitalInput IN5_RemoteStartOUT_2;
 	uint8_DigitalInput IN6_RemoteStartOUT_1;
 	uint8_DigitalInput IN8_FaultAL11_EXT;
-	/* Time */
+	/* Relay */
+	SetOfRelays Relay;
+	/* Alarm */
+	SetOfAlarms Alarm;
+	/* Time (in ds) */
 	uint16_Time Adsorption; 		/* 0 - 3600 decimi */
 //	uint16_Time InitialAdsorption; 	/* 0 - 3600 decimi */
 	uint8_Time Compensation; 		/* 0 -  100 decimi */
@@ -73,5 +105,10 @@ typedef struct{
 //	QueueStruct AirFlux;
 //	RelayStruct Relay[];
 }PSAStruct;
+
+void PSA_Relay_RunningAndOutNotUsed();
+void PSA_Relay_RunningAndOutUsed();
+void PSA_Relay_GoingStandby();
+void PSA_Relay_Standby();
 
 #endif /* PSA_H_ */

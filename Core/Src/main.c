@@ -40,7 +40,6 @@
 
 uint8_t Command[COMMAND_SIZE];
 extern uint8_t charState[];
-uint8_t boh;
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
@@ -92,10 +91,16 @@ const osThreadAttr_t ManageReceive_attributes = {
   .stack_size = 128 * 4,
   .priority = (osPriority_t) osPriorityLow,
 };
+/* Definitions for RelayTask */
+osThreadId_t RelayTaskHandle;
+const osThreadAttr_t RelayTask_attributes = {
+  .name = "RelayTask",
+  .stack_size = 128 * 4,
+  .priority = (osPriority_t) osPriorityLow,
+};
 /* USER CODE BEGIN PV */
 extern QueueStruct AirFlux;
 extern QueueStruct Oxygen;
-extern RelayStruct Relay[];
 extern PSAStruct PSA;
 extern uint8_t DigitalInput;
 extern uint8_t Condition;
@@ -117,9 +122,12 @@ void StartModeTask(void *argument);
 void StartCAN1_TxValveStateTask(void *argument);
 void StartUART_RxMxTask(void *argument);
 void StartTask06(void *argument);
+void StartRelayTask(void *argument);
+
 /* USER CODE BEGIN PFP */
 int __io_putchar(int character);
 uint16_t Convert_Command_Value(uint8_t * Command, uint8_t Command_Size, uint8_t PrefixLength);
+void AssignDefaultValue();
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -160,7 +168,7 @@ int main(void)
   MX_DMA_Init();
   MX_USART2_UART_Init();
   /* USER CODE BEGIN 2 */
-
+  AssignDefaultValue();
   /* USER CODE END 2 */
 
   /* Init scheduler */
@@ -200,6 +208,9 @@ int main(void)
 
   /* creation of ManageReceive */
   ManageReceiveHandle = osThreadNew(StartTask06, NULL, &ManageReceive_attributes);
+
+  /* creation of RelayTask */
+  RelayTaskHandle = osThreadNew(StartRelayTask, NULL, &RelayTask_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
@@ -423,6 +434,25 @@ uint16_t Convert_Command_Value(uint8_t * Command, uint8_t Command_Size, uint8_t 
 	return Value;
 }
 
+void AssignDefaultValue()
+{
+	PSA.B1_IncomingAirPressure.LowerThreshold = 580; 	//SB1L
+	PSA.B1_IncomingAirPressure.UpperThreshold = 600; 	//SB1H
+
+	PSA.B3_ProcessTankPressure.LowerThreshold = 600; 	//SB3L
+	PSA.B3_ProcessTankPressure.UpperThreshold = 650; 	//SB3H
+
+	PSA.B2_OutputPressure_1.LowerThreshold = 500; 		//SB2L
+	PSA.B2_OutputPressure_1.UpperThreshold = 700; 		//SB2H
+
+	PSA.B4_OutputPressure_2.LowerThreshold = 500; 		//SB4L
+	PSA.B4_OutputPressure_2.UpperThreshold = 700; 		//SB4H
+
+	PSA.OUTPriority = 2;								//PR_OUT
+
+	PSA.KE1_OxygenSensor_1.LowerThreshold = 4; 			//SO2-1
+	PSA.KE2_OxygenSensor_2.LowerThreshold = 2; 			//SO2-2
+}
 /* USER CODE END 4 */
 
 /* USER CODE BEGIN Header_StartStateTask */
@@ -435,17 +465,38 @@ uint16_t Convert_Command_Value(uint8_t * Command, uint8_t Command_Size, uint8_t 
 void StartStateTask(void *argument)
 {
   /* USER CODE BEGIN 5 */
-	vTaskResume(StateTaskHandle);
-	PSA.State = 1;
 	TickType_t StateTaskDelayTimer = xTaskGetTickCount();
+	int NextState = 0;
   /* Infinite loop */
   for(;;)
   {
-	  PSA.State = State_AdsorptionCycleNStandby(PSA.State);
+	  if(PSA.NextState.Timer)
+		  PSA.NextState.Timer--;
+
+	  if(!PSA.NextState.Timer)
+	  {
+		  PSA.State = NextState;
+		  NextState = State_AdsorptionCycleNStandby(PSA.State);
+	  }
+
 #ifdef DEBUG_UART_TX_STATE
 		 HAL_UART_Transmit(&huart2, (uint8_t*)&charState, 2, 0xFFFFFFFF);
 #endif /* DEBUG_UART_TX_STATE */
-	  vTaskDelayUntil(&StateTaskDelayTimer, 20 * deciseconds);
+
+		 /* Check if the mode is changing */
+		 if(PSA.Mode.Standby && (PSA.State > 0))
+		 {/* ModeTask ask to Standby */
+			 PSA.State = -2;
+			 NextState = State_AdsorptionCycleNStandby(PSA.State);
+		 }
+		 else if(PSA.Mode.Run && (!PSA.State))
+		 {/* ModeTask ask to Run */
+			 PSA.State = 1;
+			 NextState = State_AdsorptionCycleNStandby(PSA.State);
+		 }
+
+		 vTaskDelayUntil(&StateTaskDelayTimer, 1 * deciseconds);
+
   }
   /* USER CODE END 5 */
 }
@@ -460,44 +511,70 @@ void StartStateTask(void *argument)
 void StartOutTask(void *argument)
 {
   /* USER CODE BEGIN StartOutTask */
-	vTaskResume(OutTaskHandle);
+	TickType_t OutTaskDelayTimer = xTaskGetTickCount();
 	  /* Infinite loop */
 	  for(;;)
 	  {
-		  if(PSA.OUT_1)
-		  {/* If OUT1 is controlled */
-			  if(PSA.KE1_OxygenSensor_1.Value > PSA.KE1_OxygenSensor_1.UpperThreshold)
-			  {/* If KE < SO2-1 -> OUT1 open*/
-				  PSA.OUT_1 = 2;
-				  if((PSA.B2_OutputPressure_1.Value > PSA.B2_OutputPressure_1.UpperThreshold) && (PSA.State))
-				  {/*If B2 > SB2H & No Standby -> Standby */
-					  PSA.State = PSA_STATE__TURN_TO_STANDBY_MODE;
+		  if(PSA.Mode.Run)
+		  {
+			  /* Run + No Out is ready -> put Out_1 or OUT_2 is ready*/
+			  if(PSA.OUT_1 == 0 && PSA.OUT_2 == 0)
+			  {
+				  if((PSA.KE1_OxygenSensor_1.LowerThreshold != 0)&&(PSA.KE2_OxygenSensor_2.LowerThreshold != 0)&&((PSA.OUTPriority == 1)||(PSA.OUTPriority == 2)))
+				  {/* (SO2-1 != OFF)&&(SO2-2 != OFF) -> OUT_priority */
+					  if(PSA.OUTPriority == 1)
+						  PSA.OUT_1 = 1;
+					  else
+						  PSA.OUT_2 = 1;
+				  }
+				  else if(PSA.KE1_OxygenSensor_1.LowerThreshold != 0)
+				  {/* (SO2-1 != OFF) -> OUT_1 else OUT_2 */
+					  PSA.OUT_1 = 1;
+				  }
+				  else
+					  PSA.OUT_2 = 1;
+			  }
+
+
+			  if(PSA.OUT_1)
+			  {/* If OUT1 is controlled */
+				  if(PSA.KE1_OxygenSensor_1.Value < PSA.KE1_OxygenSensor_1.LowerThreshold)
+				  {/* If KE < SO2-1 -> OUT1 open*/
+					  PSA.OUT_1 = 2;
 				  }
 			  }
-			  if((PSA.B2_OutputPressure_1.Value < PSA.B2_OutputPressure_1.LowerThreshold) && (!(PSA.State)))
-			  {/* If B2 < SB2L + Standby -> ADSOCycle */
-				  PSA.State = PSA_STATE__TURN_TO_ADSOCYCLE_MODE;
-			  }
-		  }
 
-		  if(PSA.OUT_2)
-		  {/* If OUT1 is controlled */
-			  if(PSA.KE2_OxygenSensor_2.Value > PSA.KE2_OxygenSensor_2.UpperThreshold)
-			  {/* If KE < SO2-1 -> OUT1 open*/
-				  PSA.OUT_2 = 2;
-				  if((PSA.B4_OutputPressure_2.Value > PSA.B4_OutputPressure_2.UpperThreshold) && (PSA.State))
-				  {/*If B4 > SB4H & No Standby -> Standby */
-					  PSA.State = PSA_STATE__TURN_TO_STANDBY_MODE;
+			  if(PSA.OUT_1 == 2 && PSA.B2_OutputPressure_1.Value > PSA.B2_OutputPressure_1.UpperThreshold && PSA.KE2_OxygenSensor_2.LowerThreshold)
+			  {/* (Run + OUT_1 working) + B2 > SB2H + SO2-2!=OFF -> OUT1=OFF + OUT2 = Ready + AL*/
+				  PSA.OUT_1 = 0;
+				  PSA.OUT_2 = 1;
+				  /* genera un allarme */
+			  }
+
+			  if(PSA.OUT_2)
+			  {/* If OUT1 is controlled */
+				  if(PSA.KE2_OxygenSensor_2.Value < PSA.KE2_OxygenSensor_2.LowerThreshold)
+				  {/* If KE < SO2-1 -> OUT1 open*/
+					  PSA.OUT_2 = 2;
 				  }
-
 			  }
-			  if((PSA.B4_OutputPressure_2.Value < PSA.B4_OutputPressure_2.LowerThreshold) && (!(PSA.State)))
-			  {/* If B4 < SB4L + Standby -> ADSOCycle */
-				  PSA.State = PSA_STATE__TURN_TO_ADSOCYCLE_MODE;
+
+			  if(PSA.OUT_2 == 2 && PSA.B4_OutputPressure_2.Value > PSA.B4_OutputPressure_2.UpperThreshold && PSA.KE1_OxygenSensor_1.LowerThreshold)
+			  {/* (Run + OUT_2 working) + B4 > SB4H + SO2-1=OFF -> OUT1=Ready + OUT2=OFF + AL */
+				  PSA.OUT_1 = 1;
+				  PSA.OUT_2 = 0;
+				  /* genera un allarme */
 			  }
 		  }
+		  else if(PSA.Mode.Standby)
+		  {
+			  if(PSA.OUT_1)
+				  PSA.OUT_1 = 1;
+			  else if(PSA.OUT_2)
+				  PSA.OUT_2 = 1;
+		  }
 
-	    vTaskDelay(deciseconds);
+	    vTaskDelayUntil(&OutTaskDelayTimer, 1 * deciseconds);
 	  }
   /* USER CODE END StartOutTask */
 }
@@ -512,34 +589,46 @@ void StartOutTask(void *argument)
 void StartModeTask(void *argument)
 {
   /* USER CODE BEGIN StartModeTask */
+	TickType_t ModeTaskDelayTimer = xTaskGetTickCount();
   /* Infinite loop */
   for(;;)
   {
-	  /* Mode_OFF -> Mode_ON */
-	  if((PSA.Mode.Ready & (!PSA.Mode.Run)) && (PSA.B1_IncomingAirPressure.Value > PSA.B1_IncomingAirPressure.UpperThreshold) && ((PSA.KE1_OxygenSensor_1.LowerThreshold != 0)||(PSA.KE2_OxygenSensor_2.LowerThreshold != 0)))
-	  {/* Mode_ReadyButNotRunning && (B1 > SB1H) && ((SO2-1 != OFF)||(SO2-2 != OFF)): starting condition */
-		  /* USER CODE BEGIN -> ModeON */
-		  vTaskResume(StateTaskHandle);
-		  vTaskResume(OutTaskHandle);
-		  /* USER CODE END -> ModeON */
-		  if((PSA.KE1_OxygenSensor_1.LowerThreshold != 0)&&(PSA.KE2_OxygenSensor_2.LowerThreshold != 0)&&((PSA.OUTPriority == 1)||(PSA.OUTPriority == 2)))
-		  {/* (SO2-1 != OFF)&&(SO2-2 != OFF) -> OUT_priority */
-			  if(PSA.OUTPriority == 1)
-				  PSA.OUT_1 = 1;
-			  else
-				  PSA.OUT_2 = 1;
-
-		  }
-		  else if(PSA.KE1_OxygenSensor_1.LowerThreshold != 0)
-		  {/* (SO2-1 != OFF) -> OUT_1 else OUT_2 */
-			  PSA.OUT_1 = 1;
-		  }
-		  else
-			  PSA.OUT_2 = 1;
+	  /* Ready + not Run + not Standby -> Run */
+	  if((PSA.Mode.Ready && !PSA.Mode.Run && !PSA.Mode.Standby && !PSA.Mode.Alarm) && ((PSA.B1_IncomingAirPressure.Value > PSA.B1_IncomingAirPressure.UpperThreshold) && ((PSA.KE1_OxygenSensor_1.LowerThreshold)||(PSA.KE2_OxygenSensor_2.LowerThreshold))))
+	  {/* (Ready + NotRun + NotStb + NoAlm) && (B1 > SB1H) && ((SO2-1 != OFF)||(SO2-2 != OFF)): starting condition */
+		  PSA.Mode.Run = 0xFF;
+		  PSA.Mode.Ready = 0xFF;
 	  }
 
+	  /* Run + OUT1 -> Standby */
+	  if((PSA.Mode.Run && PSA.OUT_1==2) && ((PSA.B2_OutputPressure_1.Value > PSA.B2_OutputPressure_1.UpperThreshold) && !PSA.KE2_OxygenSensor_2.LowerThreshold))
+	  {/* Run + OUT1 + B2 > SB2H -> Standby */
+		  PSA.Mode.Run = 0x00;
+		  PSA.Mode.Standby = 0xFF;
+	  }
 
-    vTaskDelay(deciseconds);
+	  /* Run + OUT2 -> Standby */
+	  if(((PSA.Mode.Run && PSA.OUT_2==2)) && ((PSA.B4_OutputPressure_2.Value > PSA.B4_OutputPressure_2.UpperThreshold) && (!PSA.KE1_OxygenSensor_1.LowerThreshold)))
+	  {/* Run + OUT2 + B4 > SB4H -> Standby */
+		  PSA.Mode.Run = 0x00;
+		  PSA.Mode.Standby = 0xFF;
+	  }
+
+	  /* Standby + OUT1 -> Run */
+	  if((!PSA.State && PSA.OUT_1 && !PSA.Mode.Alarm) && (PSA.B2_OutputPressure_1.Value < PSA.B2_OutputPressure_1.LowerThreshold))
+	  {/* Standby & B2 < SB2L & No Alarm -> Run*/
+		  PSA.Mode.Run = 0xFF;
+		  PSA.Mode.Standby = 0x00;
+	  }
+
+	  /* Standby + OUT2 -> Run */
+	  if((!PSA.State && PSA.OUT_2 && !PSA.Mode.Alarm) && (PSA.B4_OutputPressure_2.Value < PSA.B4_OutputPressure_2.LowerThreshold))
+	  {/* Standby & B2 > SB2L & No Alarm -> Run*/
+		  PSA.Mode.Run = 0xFF;
+		  PSA.Mode.Standby = 0x00;
+	  }
+
+	  vTaskDelayUntil(&ModeTaskDelayTimer, 1 * deciseconds);
   }
   /* USER CODE END StartModeTask */
 }
@@ -554,10 +643,22 @@ void StartModeTask(void *argument)
 void StartCAN1_TxValveStateTask(void *argument)
 {
   /* USER CODE BEGIN StartCAN1_TxValveStateTask */
+	CAN_TxHeaderTypeDef TxHeader;
+	TxHeader.StdId = 0x201;
+	TxHeader.ExtId = 0x00;
+	TxHeader.RTR = CAN_RTR_DATA;
+	TxHeader.IDE = CAN_ID_STD;
+	TxHeader.DLC = 8;
+
+	uint32_t TxMailbox;
+
+	TickType_t TaskDelayTimer = xTaskGetTickCount();
   /* Infinite loop */
   for(;;)
   {
-    osDelay(1);
+
+	  HAL_CAN_AddTxMessage(&hcan1, &TxHeader, PSA.ValveState, &TxMailbox);
+    vTaskDelayUntil(&TaskDelayTimer, 1 * deciseconds);
   }
   /* USER CODE END StartCAN1_TxValveStateTask */
 }
@@ -572,12 +673,16 @@ void StartCAN1_TxValveStateTask(void *argument)
 void StartUART_RxMxTask(void *argument)
 {
   /* USER CODE BEGIN StartUART_RxMxTask */
+#ifndef DEBUG_UART
+	vTaskSuspend(UART_RxMxTaskHandle);
+#endif
   /* Infinite loop */
   for(;;)
   {
-
+#ifdef DEBUG_UART
 	  boh = HAL_UART_Receive_DMA(&huart2, (uint8_t*)&Command, COMMAND_SIZE);
 	  osDelay(100);
+#endif
   }
   /* USER CODE END StartUART_RxMxTask */
 }
@@ -592,11 +697,13 @@ void StartUART_RxMxTask(void *argument)
 void StartTask06(void *argument)
 {
   /* USER CODE BEGIN StartTask06 */
-#ifdef	DEBUG_UART_TX_COMMAND
+#ifndef DEBUG_UART
+	vTaskSuspend(ManageReceiveHandle);
 #endif
   /* Infinite loop */
   for(;;)
   {
+#ifdef DEBUG_UART
 	  if(Command[0] != 0)
 	  { /* Check out: Analog Input */
 		  if(Command[0] == 'B' && Command[1] == '1')/* B1 */
@@ -626,11 +733,47 @@ void StartTask06(void *argument)
 	  /* Clear all */
 	  for(int i = 0; i < COMMAND_SIZE; i++)
 	  			  Command[i] = 0;
-	  vTaskDelay(100);
+#endif
+	  vTaskDelay(100* deciseconds);
   }
   /* USER CODE END StartTask06 */
 }
 
+/* USER CODE BEGIN Header_StartRelayTask */
+/**
+* @brief Function implementing the RelayTask thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_StartRelayTask */
+void StartRelayTask(void *argument)
+{
+  /* USER CODE BEGIN StartRelayTask */
+	TickType_t RelayTaskDelayTimer = xTaskGetTickCount();
+  /* Infinite loop */
+  for(;;)
+  {
+	  if(PSA.Mode.Run && (PSA.OUT_1==1||PSA.OUT_2==1))
+	  {
+		  PSA_Relay_RunningAndOutNotUsed();
+	  }
+	  else if(PSA.Mode.Run && (PSA.OUT_1==2||PSA.OUT_2==2))
+	  {
+		  PSA_Relay_RunningAndOutUsed();
+	  }
+	  else if(PSA.Mode.Standby && PSA.State)
+	  {
+		  PSA_Relay_GoingStandby();
+	  }
+	  else if(PSA.Mode.Standby && !PSA.State)
+	  {
+		  PSA_Relay_Standby();
+	  }
+
+	  vTaskDelayUntil(&RelayTaskDelayTimer, 1 * deciseconds);
+  }
+  /* USER CODE END StartRelayTask */
+}
 
 /**
   * @brief  Period elapsed callback in non blocking mode
